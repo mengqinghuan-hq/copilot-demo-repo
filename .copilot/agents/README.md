@@ -19,3 +19,20 @@ Notes:
 - Keep definitions small and well-documented. Include contact info in agent file when needed.
 
 If you need automation later, create a secure workflow and request explicit approval.
+
+## Team collaboration (roles & approval)
+Define clear roles for any change that affects agents or workflows:
+
+- Author: the person who creates or updates the agent definition.
+- Reviewer(s): at least one teammate who reviews content and validates safety and scope.
+- Approver(s): repository maintainer or team lead who approves and merges the change.
+- Acceptance owner: the person responsible for final verification that the agent behaves as intended.
+
+Recommended flow:
+1. Create a requirement issue (use .github/ISSUE_TEMPLATE/requirement.md) and assign Product and Acceptance owner.
+2. Implement changes in a feature branch and open a PR referencing the requirement issue.
+3. Request review from Reviewer(s) and wait for approvals.
+4. Approver merges when CI passes.
+5. Acceptance owner performs verification and closes the requirement issue when accepted.
+
+Tagging conventions: use @team or specific handles in issue/pr metadata to notify the right people.
