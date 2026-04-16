@@ -1,0 +1,118 @@
+name: Development Lifecycle
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  checks: write
+
+jobs:
+  design-and-requirements:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check PR for requirement issue reference
+        if: github.event_name == 'pull_request'
+        run: |
+          body="${{ github.event.pull_request.body || '' }}"
+          if echo "$body" | grep -qE "#\\d+"; then
+            echo "Found requirement issue reference in PR body"
+          else
+            echo "Warning: PR body does not reference a requirement issue. Please link the requirement issue."
+          fi
+      - name: Check for Design doc
+        run: |
+          if [ -f DESIGN.md ] || grep -qi "design" <<< "${{ github.event.pull_request.body || '' }}"; then
+            echo "Design doc present"
+          else
+            echo "Warning: no DESIGN.md or design link found in PR body"
+          fi
+
+  build-and-test:
+    needs: design-and-requirements
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node if package.json exists
+        if: ${{ runner.os == 'Linux' && (contains(fromJSON('[]'), 'noop') || true) }}
+        run: |
+          echo "Checking for package.json..."
+          if [ -f package.json ]; then
+            echo "package.json found"
+            curl -sL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            sudo apt-get install -y nodejs
+            npm ci --no-audit --no-fund || true
+            if npm run | grep -q '\btest\b'; then
+              npm test || exit 1
+            else
+              echo "No npm test script; skipping npm test"
+            fi
+          else
+            echo "No package.json; skipping Node steps"
+          fi
+      - name: Run pytest if present
+        run: |
+          if [ -f requirements.txt ] || [ -d tests ] || ls *_test.py 1>/dev/null 2>&1; then
+            python3 -m pip install --upgrade pip
+            python3 -m pip install -r requirements.txt || true
+            if command -v pytest >/dev/null 2>&1; then
+              pytest -q || exit 1
+            else
+              python3 -m pip install pytest
+              pytest -q || exit 1
+            fi
+          else
+            echo "No Python tests detected"
+          fi
+      - name: Collect test result status
+        if: ${{ always() }}
+        run: |
+          echo "TEST_STATUS=$([[ -f junit.xml ]] && echo 'junit' || echo 'unknown')" >> $GITHUB_ENV
+
+  report:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Generate acceptance report
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number || '' }}"
+          echo "# Acceptance Report" > acceptance-report.md
+          echo "" >> acceptance-report.md
+          echo "Repository: ${{ github.repository }}" >> acceptance-report.md
+          echo "PR: $PR_NUMBER" >> acceptance-report.md
+          echo "Commit: ${{ github.sha }}" >> acceptance-report.md
+          echo "Date: $(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> acceptance-report.md
+          echo "" >> acceptance-report.md
+          echo "## Checks summary" >> acceptance-report.md
+          if [ "${{ needs.build-and-test.result }}" = "success" ]; then
+            echo "All checks passed." >> acceptance-report.md
+          else
+            echo "Some checks failed. See Actions logs." >> acceptance-report.md
+          fi
+          echo "" >> acceptance-report.md
+          echo "## Notes" >> acceptance-report.md
+          echo "Attach any manual verification steps here." >> acceptance-report.md
+      - name: Upload acceptance report
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-report
+          path: acceptance-report.md
+      - name: Create Issue on failure
+        if: ${{ needs.build-and-test.result != 'success' && github.event_name == 'pull_request' }}
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request
+            const title = `Tests failed for PR #${pr.number}: ${pr.title}`
+            const body = `Automated CI detected failing tests for PR #${pr.number}.\n\nCommit: ${pr.head.sha}\n\nPlease investigate and push a fix.`
+            const issue = await github.rest.issues.create({owner: context.repo.owner, repo: context.repo.repo, title, body})
+            core.info('Created issue: ' + issue.data.html_url)
